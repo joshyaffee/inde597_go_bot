@@ -118,7 +118,7 @@ class GoBoard:
 
     def _coord_to_pos(self, coord):
         # A1 -> (0, 0), S1 -> (18, 0)
-        x = ord(coord[0]) - ord("A")
+        x = ord(coord[0].upper()) - ord("A")
         y = int(coord[1:]) - 1
         if x < 0 or x >= self.size or y < 0 or y >= self.size:
             raise ValueError("Invalid coordinate")
