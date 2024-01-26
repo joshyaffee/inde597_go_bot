@@ -17,8 +17,8 @@ defaults to the website's default for level 1+ games.
 
 # constants
 BOARD_SIZE = 9
+BOT_PLAY = True
 
-# imports
 import networkx as nx
 import numpy as np
 import re
@@ -29,7 +29,8 @@ class GoGame:
 
     Constructor Inputs:
         - board_size: int, size of board (5-19)
-        - komi: float, number of points white gets for going second (default: -1, which means use website's default)
+        - komi: float, number of points white gets for going second (default: -1, which
+          means use website's default)
     
     Attributes:
         - board_size: int, size of board (5-19)
@@ -43,7 +44,6 @@ class GoGame:
         - black_score: int, score for black (using Chinese scoring)
         - white_score: int, score for white (using Chinese scoring)
 
-    TODO: adapt for bot self-play
     """
     def __init__(self, board_size: int, komi: float = -1):
         if board_size < 5 or board_size > 19:
@@ -144,23 +144,36 @@ class GoGame:
         else:
             print("Tie!")
     
-    # def bot_play(self):
-    #     black_agent = Agent() # TODO: implement agent class
-    #     white_agent = Agent()
-    #     agents = {1: black_agent, -1: white_agent}
-    #     my_turn = 1 # 1: black, -1: white
-    #     while not self.game_over:
-    #         move = agents[my_turn].get_move(self.board)
-    #         if not self.play_move(move):
-    #             raise ValueError("Invalid move")
-    #         else:
-    #             my_turn *= -1
-    #     if self.black_score > self.white_score:
-    #         return 1
-    #     elif self.white_score > self.black_score:
-    #         return -1
-    #     else:
-    #         return 0
+    def bot_play(self, black_policy, white_policy, print_board: bool = False):
+        """
+        Allows two agents to play against each other.
+        """
+        from agent import Agent
+
+        black_agent = Agent(1, black_policy)
+        white_agent = Agent(-1, white_policy)
+
+        agents = {1: black_agent, -1: white_agent}
+        my_turn = 1 # 1: black, -1: white
+        while not self.game_over:
+            if print_board:
+                self.board.print_board()
+                print("\n")
+            move = agents[my_turn].act(self.board)
+            if move == "resign" and print_board:
+                print("Game over. " + ("Black" if my_turn == 1 else "White") + " resigns.")
+            if move == "pass" and print_board:
+                print("Pass.")
+            if not self.play_move(move):
+                raise ValueError("Invalid move: " + str(move))
+            else:
+                my_turn *= -1
+        if self.black_score > self.white_score:
+            return 1
+        elif self.white_score > self.black_score:
+            return -1
+        else:
+            return 0
                 
 class GoBoard:
     """
@@ -323,14 +336,11 @@ class GoBoard:
                 liberties, group = self.check_liberties(neighbor[0], neighbor[1], -color)
                 # if it ran out of liberties, capture it / return 1 if check_only
                 if len(set(liberties) - {(x,y)}) == 0:
-                    if not check_only:
-                        capture_add = self.capture_stones(group, x, y)
-                        capture_num += capture_add
-                    else:
-                        return 1
+                    capture_add = self.capture_stones(group, x, y, check_only=check_only)
+                    capture_num += capture_add
         return capture_num
       
-    def capture_stones(self, group, x, y):
+    def capture_stones(self, group, x, y, check_only=False):
         """
         Captures a group of stones, placing a stone on (x,y).
 
@@ -355,7 +365,7 @@ class GoBoard:
             return 0
         
         # if not, update board
-        else:
+        elif not check_only:
             self.graph_board = possible_board
             self.matrix_board = possible_matrix_board
         return len(group)
@@ -410,9 +420,11 @@ class GoBoard:
                    self.check_captures(node[0], node[1], color, check_only = True) > 0:
                     
                     legal_moves.append(node)
+
+        legal_moves = [self._pos_to_coord(*m) for m in legal_moves]
         legal_moves.append("pass")
         legal_moves.append("resign") # we may want to remove this option for bot self-play!!!
-        return legal_moves.map(self._pos_to_coord)
+        return legal_moves
     
     def print_board(self):
         """
@@ -513,6 +525,18 @@ class GoBoard:
         pass
 
 if __name__ == "__main__":
-    # For now: main -> user_play
     game = GoGame(BOARD_SIZE)
-    game.user_play()
+    if not BOT_PLAY:
+        game.user_play()
+    else:
+        from agent import random_move, capture_first, random_diagonal
+        result = game.bot_play(random_diagonal, capture_first, print_board=True)
+
+        # play 100 games of bot vs bot
+        # results = []
+        # for i in range(100):
+        #     result = game.bot_play(random_move, capture_first, print_board=False)
+        #     results.append(result)
+        #     print(f"Game {i+1}: {'Black' if result == 1 else 'White' if result == -1 else 'Draw'}")
+        # # print record of math (Black wins / Ties / White wins)
+        # print(f"Record: \nBlack Wins: {results.count(1)}\nDraws: {results.count(0)}\nWhite Wins: {results.count(-1)}")
