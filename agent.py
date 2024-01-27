@@ -62,7 +62,7 @@ def random_diagonal(board: GoBoard, color):
         if move == "pass":
             continue
         x, y = board._coord_to_pos(move)
-        if x == y:
+        if x % 2 == y % 2:
             diagonal_moves.append(move)
     if diagonal_moves:
         return np.random.choice(diagonal_moves)
