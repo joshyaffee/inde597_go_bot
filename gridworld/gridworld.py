@@ -6,6 +6,7 @@ all else have a reward of -1. 4 actions: up, down, left, right.
 transitions are deterministic, running into a wall keeps you in the same state.
 """
 from enum import Enum
+import numpy as np
 
 class Action(Enum):
     UP = 0
@@ -15,10 +16,11 @@ class Action(Enum):
 
 class Agent:
 
-    def __init__(self, i, j):
+    def __init__(self, i = 3, j = 1):
         self.i = i
         self.j = j
         self.episode = 0
+        self.rewards = []
         self.policy = {(i,j): {Action.UP: .25, 
                                Action.DOWN: .25, 
                                Action.LEFT: .25, 
@@ -30,6 +32,41 @@ class Agent:
        
         self.v = {}
 
+    def simulate(self, N, x = 3, y = 2):
+        for i in range(N):
+            self.run_episode(x, y)
+            if i % 100 == 0:
+                print(f"Episode {i} mean reward so far: {np.mean(self.rewards)}")
+        return np.mean(self.rewards)
+
+    def run_episode(self, x, y):
+        self.i = x
+        self.j = y
+        self.episode += 1
+        this_reward = 0
+        while not is_terminal(self.i, self.j):
+            a = self.act()
+            (self.i, self.j) = transition(self.i, self.j, a)
+            this_reward += reward(a)
+        self.rewards.append(this_reward)
+            
+            
+
+    def act(self):
+        p = np.random.rand()
+        if p < self.policy[(self.i, self.j)][Action.UP]:
+            return Action.UP
+        else:
+            p -= self.policy[(self.i, self.j)][Action.UP]
+        if p < self.policy[(self.i, self.j)][Action.DOWN]:
+            return Action.DOWN
+        else:
+            p -= self.policy[(self.i, self.j)][Action.DOWN]
+        if p < self.policy[(self.i, self.j)][Action.LEFT]:
+            return Action.LEFT
+        else:
+            return Action.RIGHT
+        
     def iterative_policy_evaluation(self, gamma, theta):
         # arbitrary initial v values except for terminal states: 0
         for i in range(4):
@@ -67,7 +104,7 @@ class Agent:
                 for j in range(4):
                     if is_terminal(i, j):
                         continue
-                    # TODO: does pi need to be deterministic?
+                    # TODO: does pi need to be deterministic? how to handle ties?
                     old_action = max(self.policy[(i, j)], key=self.policy[(i, j)].get)
                     self.policy_improvement(i, j, gamma)
                     new_action = max(self.policy[(i, j)], key=self.policy[(i, j)].get)
@@ -103,3 +140,8 @@ def reward(a):
 
 def is_terminal(i, j):
     return (i, j) == (0, 0) or (i, j) == (3, 3)
+
+
+agent = Agent()
+mean = agent.simulate(1_000_000)
+print(mean)
