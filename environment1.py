@@ -1,242 +1,190 @@
-########################################################################
-#   IMPORTANT: SCORING USES CHINESE RULES AND ASSUMES NO DEAD STONES   #
-#                                                                      #
-#   THIS CAN BE PROBLEMATIC SINCE IT IS NO LONGER DISCOURAGED TO PLAY  #
-#   UNNECESSARY MOVES TO FILL IN YOUR OWN TERRITORY... OR YOUR         #
-#   OPPONENT'S TERRITORY AFTER THE GAME IS RESOLVED STRATEGICALLY.     #
-#                                                                      #
-#   (The website--and most people--use Japanese rules, so this is a    #
-#    serious issue, and should be addressed ASAP)                      #
-########################################################################
-
 """
-Code currently implemented for user to play against itself, but can be easily modified for bot self-play.
-Adjust BOARD_SIZE to your liking. You can also adjust komi within the GoGame class instantiation, but it 
-defaults to the website's default for level 1+ games.
+Environment for a Go Board.
+Methods will be modelled after OpenAI Gym's environment API when possible.
 """
 
-# constants
-BOARD_SIZE = 9
-BOT_PLAY = True
-
-import networkx as nx
 import numpy as np
-import re
+import networkx as nx
 
-class GoGame:
-    """
-    Class to represent a game of Go.
+class GoBoard:
 
-    Constructor Inputs:
-        - board_size: int, size of board (5-19)
-        - komi: float, number of points white gets for going second (default: -1, which
-          means use website's default)
-    
-    Attributes:
-        - board_size: int, size of board (5-19)
-        - komi: float, number of points white gets for going second
-        - board: GoBoard object, represents the board
-        - history: list of tuples of ints, represents the board at each turn
-        - turn: int, 1 for black, -1 for white
-        - passes: int, number of passes in a row (2 passes -> game over)
-        - captures: dict, number of captures for each color
-        - game_over: bool, True if game is over
-        - black_score: int, score for black (using Chinese scoring)
-        - white_score: int, score for white (using Chinese scoring)
+    graph_board = None
+    matrix_board = None
+    white_ints = None
+    black_ints = None
+    integer_representation = None
 
-    """
-    def __init__(self, board_size: int, komi: float = -1):
-        if board_size < 5 or board_size > 19:
-            raise ValueError("board_size must be between 5 and 19")
-        self.board_size = board_size
-
-        # komi is the number of points white gets for going second
+    def __init__(self, size: int = 9, komi: float = -1):
+        self.size = size
         if komi < 0:
-            komi = 0 if self.board_size < 9 else 6.5
+            self.komi = 0 if self.board_size < 9 else 6.5
         self.komi = komi
-
-        self.board = GoBoard(self.board_size, self)
-
-        # example state: ([1, 0, 0, 0, 0], [0, 0, 0, 0, 16]) -> black has a stone at A1, white has a stone at E5
-        self.history = [([0]*self.board_size, [0]*self.board_size)]
+        self.history = []
         self.turn = 1 # 1: black, -1: white
         self.passes = 0
         self.captures = {1: 0, -1: 0}
         self.game_over = False
         self.black_score = None
         self.white_score = None
-
-    def play_move(self, coord) -> bool:
+        self.init_graph_board(size)
+        self.matrix_board = np.zeros((size, size), dtype=int)
+        self.white_ints = [0] * size # each entry incodes a row of white stones
+        self.black_ints = [0] * size # each entry incodes a row of black stones
+        self.integer_representation = [self.white_int, self.black_int]
+    
+    def reset(self, board = None, turn = 1):
         """
-        Attempts to play a move at coord. Returns True if successful, False otherwise.
-
-            - coord: string, e.g. "A1", "S1", "pass", "resign"
+        Resets the board to the initial state. If a board representation is provided
         """
-        coord = coord.upper()
+        if board is None:
+            self.__init__(self.size, self.komi)
+        elif type(board) is np.ndarray:
+            if board.shape != (self.size, self.size):
+                raise ValueError("Board shape must match size of GoBoard environment")
+            self.matrix_board = board
+
+            # update graph representation
+            self.graph_board = self.init_graph_board(self.size)
+            
+            # update ints representation
+            self.update_ints(board)
+
+        elif type(board) is list:
+            if len(board) != 2:
+                raise ValueError("Board representation must be a list of two lists")
+            if len(board[0]) != self.size or len(board[1]) != self.size:
+                raise ValueError("Board representation must be a list of two lists of length equal to the size of the GoBoard environment")
+            self.integer_representation = board
+            self.update_matrix_from_ints(board)
+
+        elif type(board) is nx.Graph:
+            # check that the nodes are labeled correctly
+            if set(board.nodes) != set([(i, j) for i in range(self.size) for j in range(self.size)]):
+                raise ValueError("Graph nodes must be labeled with tuples of integers from 0 to size - 1")
+            for node in board.nodes:
+                if board.nodes[node]["color"] not in [-1, 0, 1]:
+                    raise ValueError("Graph nodes must have a 'color' attribute with value -1, 0, or 1")
+                else:
+                    self.matrix_board[node[0], node[1]] = board.nodes[node]["color"]
+            self.graph_board = board
+            self.update_ints(board)
+
+        else:
+            raise ValueError("Invalid board representation")
+        
+        self.turn = turn
+        self.history = []
+        self.passes = 0
+        self.captures = {1: 0, -1: 0}
+        self.game_over = False
+        self.black_score = None
+        self.white_score = None
+
+    def step(self, action, representation = 0):
+        """
+        Takes a step in the game.
+        """
+        coord = action.upper()
+
         if coord == "PASS":
             self.passes += 1
-            self.turn = -self.turn
+            self.turn *= -1
             self.history.append((self.board.black_ints, self.board.white_ints))
-            if self.passes == 2: # 2 passes -> game over
-                self.black_score, self.white_score = self.board.get_score_chinese()
-                # probably comment this out for bot self-play
-                print(f"Game over! Score is: Black {self.black_score} - White {self.white_score}")
+            if self.passes == 2:
                 self.game_over = True
-            return True
-        
+                self.black_score, self.white_score = self.get_score_chinese()
+
         elif coord == "RESIGN": # we may want to remove this option for bot self-play
             self.history.append((self.board.black_ints, self.board.white_ints))
             print("Game over!")
             self.black_score = -1 * self.turn
             self.white_score = 0
             self.game_over = True
-            return True
-        
         else:
-            # check if move is valid, and make move if it is
             if self.board.add_stone(coord, self.turn):
-
                 # reset passes
                 self.passes = 0
-
                 # switch turns
                 self.turn = -self.turn
-
                 # add to history
                 self.history.append((self.board.black_ints, self.board.white_ints))
-                return True
             else:
-                return False
-            
-    def user_play(self):
+                raise ValueError("Invalid move")
+
+        if self.game_over:
+            self.black_score, self.white_score = self.get_score_chinese()
+        else:
+            self.black_score, self.white_score = None, None
+
+        if representation == 0:
+            rep = self.integer_representation
+        elif representation == 1:
+            rep = self.matrix_board
+        else:
+            rep = self.graph_board
+        return rep, self.turn, self.game_over, (self.black_score, self.white_score)
+
+    def update_ints(self, board = None, in_place = True):
         """
-        Allows user to play against itself. Prints board after each move.
+        Finds the ints representation of the board. If in_place, updates the board's ints attributes.
+        If not in_place, returns the ints representation. If no board is provided, uses the current board.
+        
+        Inputs:
+            - board: numpy array, represents the board
+            - in_place: bool, if True, updates the board's ints attributes
+                            if False, returns the ints representation
         """
 
-        colors = {1: "Black", -1: "White"}
-        # game loop
-        while not self.game_over:
-            this_turn = self.turn
-            self.board.print_board()
-
-            # turn loop (until valid move is played)
-            while self.turn == this_turn and not self.game_over:
-                coord = input(f"{colors[self.turn]}'s turn. Enter a valid move:")
-                # use regex to check if coord is letter number, also check if it's on the board
-                if re.match(r"[A-Za-z][0-9]+", coord) or coord.upper() == "PASS" or coord.upper() == "RESIGN":
-                    # in case something like Z1000 is entered:
-                    try:
-                        _ = self.board._coord_to_pos(coord)
-                    except:
-                        print("That is not on the board. Please enter a valid move such as 'A1' or 'pass' or 'resign'.")
-                    
-                    # play the move
-                    if not self.play_move(coord):
-                            print("Invalid move!")
+        white_ints = [0] * self.size
+        black_ints = [0] * self.size
+        if board is None:
+            board = self.matrix_board
+        for i in range(self.size):
+            for j in range(self.size):
+                # for each row i, the int is the sum of 2^j for each j such that board[i, j] == this color 
+                if board[i, j] == 1:
+                    black_ints[i] += 1 << j
+                elif board[i, j] == -1:
+                    white_ints[i] += 1 << j
+        
+        # update board's ints attributes if in_place, otherwise return ints
+        if in_place:
+            self.white_ints = white_ints
+            self.black_ints = black_ints
+            self.integer_representation = [black_ints, white_ints]
+        else:
+            return [black_ints, white_ints]
+        
+    def update_matrix_from_ints(self, ints):
+        """
+        Updates the matrix representation of the board from the ints representation.
+        """
+        white_ints, black_ints = ints
+        for i in range(self.size):
+            for j in range(self.size):
+                if white_ints[i] & (1 << j):
+                    self.matrix_board[i, j] = -1
+                elif black_ints[i] & (1 << j):
+                    self.matrix_board[i, j] = 1
                 else:
-                    print("Invalid input. Please enter a valid move such as 'A1' or 'pass' or 'resign'.")
+                    self.matrix_board[i, j] = 0
+        self.integer_representation = ints
 
-        # print result
-        if self.black_score > self.white_score:
-            print("Black wins!")
-        elif self.white_score > self.black_score:
-            print("White wins!")
-        else:
-            print("Tie!")
-    
-    def bot_play(self, black_policy, white_policy, print_board: bool = False):
+    def init_graph_board(self):
         """
-        Allows two agents to play against each other.
-        """
-        from agent import Agent
-
-        black_agent = Agent(1, black_policy)
-        white_agent = Agent(-1, white_policy)
-
-        agents = {1: black_agent, -1: white_agent}
-        my_turn = 1 # 1: black, -1: white
-        while not self.game_over:
-            if print_board:
-                self.board.print_board()
-                print("\n")
-            move = agents[my_turn].act(self.board)
-            if move == "resign" and print_board:
-                print("Game over. " + ("Black" if my_turn == 1 else "White") + " resigns.")
-            if move == "pass" and print_board:
-                print("Pass.")
-            if not self.play_move(move):
-                raise ValueError("Invalid move: " + str(move))
-            else:
-                my_turn *= -1
-        if self.black_score > self.white_score:
-            return 1
-        elif self.white_score > self.black_score:
-            return -1
-        else:
-            return 0
-                
-class GoBoard:
-    """
-    Class to represent the board.
-    
-    Constructor Inputs:
-        - size: int, size of board (5-19)
-        - game: GoGame object, represents the game
-        
-    Attributes:
-        - size: int, size of board (5-19)
-        - graph_board: networkx graph, represents the board
-        - matrix_board: numpy array, represents the board
-        - white_ints: list of ints, represents the board
-        - black_ints: list of ints, represents the board
-        - game: GoGame object, represents the game
-    """
-
-    def __init__(self, size: int, game: GoGame):
-        # size of board (5-19)
-        self.size = size
-        # networkx graph, nodes are tuples of ints, edges represent adjacency, color represents stone color
-        self.graph_board = self._init_graph_board() 
-        # GoGame object, represents the game
-        self.game = game
-        # numpy array, 1 for black, -1 for white, 0 for empty
-        self.matrix_board = np.zeros((size, size), dtype=np.int8)
-        # for each color: list of ints, each int represents a row 
-        self.white_ints = [0] * size 
-        self.black_ints = [0] * size 
-
-    def __eq__(self, other):
-        """
-        Two GoBoards are equal if their white_ints and black_ints are equal. 
-        Captured stones and turn are not considered.
-
-        This is unused currently
-        """
-        return self.white_ints == other.white_ints and self.black_ints == other.black_ints
-        # unused, since we only store the ints in history, but could be useful
-
-    def _init_graph_board(self):
-        """
-        Initializes the graph_board attribute.
-        
-        Nodes are represented by tuples of ints, e.g. (0, 0) is A1, (18, 0) is S1, (0, 18) is A19, etc.
-        Edges represent adjacency on the board.
-        Node attributes:
-            - color: int, 1 for black, -1 for white, 0 for empty
+        Initializes the graph representation of the board.
         """
 
         graph_board = nx.grid_2d_graph(self.size, self.size)
         for node in graph_board.nodes:
             graph_board.nodes[node]["color"] = 0
-        return graph_board
-    
-    def get_color(self, coord):
-        """
-        Returns the color at coord.
-        I don't think this is used anywhere, but it could improve readability.
-        """
-        x, y = self._coord_to_pos(coord)
-        return self.graph_board.nodes[(x, y)]["color"]
+       
+        
+        for i in range(self.size):
+            for j in range(self.size):
+                graph_board[(i,j)]['color'] = self.matrix_board[i,j]
+
+        self.graph_board = graph_board
 
     def _coord_to_pos(self, coord):
         # A1 -> (0, 0), S1 -> (18, 0)
@@ -370,36 +318,6 @@ class GoBoard:
             self.matrix_board = possible_matrix_board
         return len(group)
 
-    def update_ints(self, board = None, in_place = True):
-        """
-        Finds the ints representation of the board. If in_place, updates the board's ints attributes.
-        If not in_place, returns the ints representation. If no board is provided, uses the current board.
-        
-        Inputs:
-            - board: numpy array, represents the board
-            - in_place: bool, if True, updates the board's ints attributes
-                            if False, returns the ints representation
-        """
-
-        white_ints = [0] * self.size
-        black_ints = [0] * self.size
-        if board is None:
-            board = self.matrix_board
-        for i in range(self.size):
-            for j in range(self.size):
-                # for each row i, the int is the sum of 2^j for each j such that board[i, j] == this color 
-                if board[i, j] == 1:
-                    black_ints[i] += 1 << j
-                elif board[i, j] == -1:
-                    white_ints[i] += 1 << j
-        
-        # update board's ints attributes if in_place, otherwise return ints
-        if in_place:
-            self.white_ints = white_ints
-            self.black_ints = black_ints
-        else:
-            return black_ints, white_ints
-
     def get_legal_moves(self, color):
         """
         Returns a list of legal moves for color.
@@ -516,28 +434,6 @@ class GoBoard:
         if black_flag and white_flag:
             return 0, visited_empty
         else:
-            # only time when both are false is starting position,
+            # only time when both are false is starting position
             return (1, visited_empty) if black_flag else (-1, visited_empty) 
         
-    def check_life(self, group):
-        # TODO: check life of groups
-        # THIS SEEMS SUPER IMPORTANT BUT QUITE HARD
-        pass
-
-if __name__ == "__main__":
-    game = GoGame(BOARD_SIZE)
-    if not BOT_PLAY:
-        game.user_play()
-    else:
-        from agent import random_move, capture_first, random_diagonal
-        
-        # result = game.bot_play(random_diagonal, capture_first, print_board=True)
-
-       #  play 100 games of bot vs bot
-        results = []
-        for i in range(100):
-            result = game.bot_play(random_move, capture_first, print_board=False)
-            results.append(result)
-            print(f"Game {i+1}: {'Black' if result == 1 else 'White' if result == -1 else 'Draw'}")
-        # print record of math (Black wins / Ties / White wins)
-        print(f"Record: \nBlack Wins: {results.count(1)}\nDraws: {results.count(0)}\nWhite Wins: {results.count(-1)}")

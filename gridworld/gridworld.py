@@ -117,7 +117,7 @@ class Agent:
                 break
     
     def policy_improvement(self, i, j, gamma):
-        best_action_set = {}
+        best_action_set = set()
         best_value = float('-inf')
         for a in Action:
             (i_prime, j_prime) = transition(i, j, a)
@@ -147,7 +147,7 @@ class Agent:
             if delta < theta:
                 break
         
-        # create a stochastic policy:
+        # create a stochastic/deterministic policy:
         for i in range(4):
             for j in range(4):
                 if is_terminal(i, j):
