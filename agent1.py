@@ -19,12 +19,12 @@ class Agent:
             raise ValueError("color must be 1 or -1")
         
     
-    def act(self, board: env.GoBoard):
+    def act(self):
         # get legal moves
-        legal_moves = board.get_legal_moves(self.color)
+        legal_moves = self.board.get_legal_moves(self.color)
 
         # use policy to select a move
-        move = self.policy(board, self.color)
+        move = self.policy(self.board, self.color)
 
         # check that the move is legal
         if move not in legal_moves:
@@ -65,3 +65,13 @@ class RandomDiagonalAgent(Agent):
         if diagonal_moves:
             return np.random.choice(diagonal_moves)
         return np.random.choice(legal_moves)
+    
+# TODO: implement deep Q learning
+class NeuralAgent(Agent):
+    def _init_policy(self):
+        pass 
+
+    def train(self, N):
+        pass
+
+    #...
