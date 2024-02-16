@@ -17,7 +17,7 @@ class GoBoard:
     def __init__(self, size: int = 9, komi: float = -1):
         self.size = size
         if komi < 0:
-            self.komi = 0 if self.board_size < 9 else 6.5
+            self.komi = 0 if self.size < 9 else 6.5
         self.komi = komi
         self.history = []
         self.turn = 1 # 1: black, -1: white
@@ -26,11 +26,11 @@ class GoBoard:
         self.game_over = False
         self.black_score = None
         self.white_score = None
-        self.init_graph_board(size)
         self.matrix_board = np.zeros((size, size), dtype=int)
+        self.init_graph_board()
         self.white_ints = [0] * size # each entry incodes a row of white stones
         self.black_ints = [0] * size # each entry incodes a row of black stones
-        self.integer_representation = [self.white_int, self.black_int]
+        self.integer_representation = [self.white_ints, self.black_ints]
     
     def reset(self, board = None, turn = 1):
         """
@@ -44,7 +44,7 @@ class GoBoard:
             self.matrix_board = board
 
             # update graph representation
-            self.graph_board = self.init_graph_board(self.size)
+            self.init_graph_board(self.size)
             
             # update ints representation
             self.update_ints(board)
@@ -341,9 +341,12 @@ class GoBoard:
 
         legal_moves = [self._pos_to_coord(*m) for m in legal_moves]
         legal_moves.append("pass")
-        legal_moves.append("resign") # we may want to remove this option for bot self-play!!!
+        # legal_moves.append("resign") # we may want to remove this option for bot self-play!!!
         return legal_moves
     
+    def render(self):
+        self.print_board()
+
     def print_board(self):
         """
         Prints the board.
