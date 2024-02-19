@@ -80,9 +80,26 @@ class GoBoard:
         self.black_score = None
         self.white_score = None
 
-    def step(self, action, representation = 0):
+def step(self, action, representation = 0):
         """
         Takes a step in the game.
+
+        Inputs:
+            - action: string, e.g. "A1", "S1", "pass", "resign"
+            - representation: int, 0 for ints, 1 for matrix, 2 for graph
+
+        Returns:
+            - rep: list of ints or numpy array or networkx graph, depending on representation
+                - ints representation: [black_ints, white_ints]; each list contains an int i
+                  for each row such that the j-th bit is 1 if there is a black/white stone
+                  in that position of the row.
+                - matrix representation: numpy array of shape (size, size), 1 for black,
+                  -1 for white, 0 for empty
+                - graph representation: networkx graph, each node has a "color" attribute.
+                  Node labels are tuples of ints (i, j) where i is the row and j is the column.
+            - reward: int, 1 for black win, -1 for white win, 0 for draw (white wants to
+              minimize value, black wants to maximize value)
+            - game_over: bool, whether the game is over
         """
         coord = action.upper()
 
@@ -110,11 +127,12 @@ class GoBoard:
                 self.history.append((self.board.black_ints, self.board.white_ints))
             else:
                 raise ValueError("Invalid move")
+                # or return very negative reward and same state
 
         if self.game_over:
             self.black_score, self.white_score = self.get_score_chinese()
         else:
-            self.black_score, self.white_score = None, None
+            self.black_score, self.white_score = 0, 0
 
         if representation == 0:
             rep = self.integer_representation
@@ -122,7 +140,16 @@ class GoBoard:
             rep = self.matrix_board
         else:
             rep = self.graph_board
-        return rep, self.turn, self.game_over, (self.black_score, self.white_score)
+
+        reward = self.black_score - self.white_score
+        if reward > 0:
+            reward = 1
+        elif reward < 0:
+            reward = -1
+        else:
+            reward = 0
+
+        return rep, reward, self.game_over
 
     def update_ints(self, board = None, in_place = True):
         """
