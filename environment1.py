@@ -80,7 +80,7 @@ class GoBoard:
         self.black_score = None
         self.white_score = None
 
-def step(self, action, representation = 0):
+    def step(self, action, representation = 0):
         """
         Takes a step in the game.
 
@@ -118,13 +118,13 @@ def step(self, action, representation = 0):
             self.white_score = 0
             self.game_over = True
         else:
-            if self.board.add_stone(coord, self.turn):
+            if self.add_stone(coord, self.turn):
                 # reset passes
                 self.passes = 0
                 # switch turns
                 self.turn = -self.turn
                 # add to history
-                self.history.append((self.board.black_ints, self.board.white_ints))
+                self.history.append((self.black_ints, self.white_ints))
             else:
                 raise ValueError("Invalid move")
                 # or return very negative reward and same state
@@ -209,7 +209,7 @@ def step(self, action, representation = 0):
         
         for i in range(self.size):
             for j in range(self.size):
-                graph_board[(i,j)]['color'] = self.matrix_board[i,j]
+                graph_board.nodes[(i,j)]['color'] = self.matrix_board[i,j]
 
         self.graph_board = graph_board
 
@@ -240,7 +240,7 @@ def step(self, action, representation = 0):
         # get numerical position, check for legal capture, capture if valid
         x, y = self._coord_to_pos(coord)
         capture_num = self.check_captures(x, y, color, check_only=False)
-        self.game.captures[color] += capture_num
+        self.captures[color] += capture_num
 
         # if stone has liberties or captures legally, add stone, update all representations, return True
         if self.check_liberties(x, y, color)[0] or capture_num > 0:
@@ -467,3 +467,8 @@ def step(self, action, representation = 0):
             # only time when both are false is starting position
             return (1, visited_empty) if black_flag else (-1, visited_empty) 
         
+# make board
+board = GoBoard(9)
+board.step("A1")
+board.step("B1")
+board.render()
