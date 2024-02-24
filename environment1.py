@@ -106,13 +106,13 @@ class GoBoard:
         if coord == "PASS":
             self.passes += 1
             self.turn *= -1
-            self.history.append((self.board.black_ints, self.board.white_ints))
+            self.history.append((self.black_ints, self.white_ints))
             if self.passes == 2:
                 self.game_over = True
                 self.black_score, self.white_score = self.get_score_chinese()
 
         elif coord == "RESIGN": # we may want to remove this option for bot self-play
-            self.history.append((self.board.black_ints, self.board.white_ints))
+            self.history.append((self.black_ints, self.white_ints))
             print("Game over!")
             self.black_score = -1 * self.turn
             self.white_score = 0
@@ -328,15 +328,15 @@ class GoBoard:
         possible_board = self.graph_board.copy()
         possible_matrix_board = self.matrix_board.copy()
 
-        possible_board.nodes[(x, y)]["color"] = self.game.turn
-        possible_matrix_board[y, x] = self.game.turn
+        possible_board.nodes[(x, y)]["color"] = self.turn
+        possible_matrix_board[y, x] = self.turn
         for stone in group:
             possible_board.nodes[stone]["color"] = 0
             possible_matrix_board[stone[1], stone[0]] = 0
             possible_ints = self.update_ints(board=possible_matrix_board, in_place=False)
 
         # check if ko rule is violated
-        if possible_ints in self.game.history:
+        if possible_ints in self.history:
             return 0
         
         # if not, update board
@@ -351,8 +351,6 @@ class GoBoard:
         
         Inputs:
             - color: int, 1 for black, -1 for white
-                (This isn't really necessary, since we can just use self.game.turn, 
-                    but it may be useful to see opponent's possible moves?)
             
         Returns:
             - legal_moves: list of strings, each string is a coordinate such as "A1" or "pass" or "resign"
@@ -428,7 +426,7 @@ class GoBoard:
                 elif ownership == -1:
                     white_area += len(area)
                 unvisited -= area
-        return black_area, white_area + self.game.komi
+        return black_area, white_area + self.komi
     
     def _check_territory(self, i, j):
         """

@@ -161,7 +161,7 @@ class Game(AbstractGame):
         Returns:
             An array of integers, subset of the action space.
         """
-        return map(self._coord_to_num, self.env.get_legal_moves(color = self.env.turn))
+        return [self._coord_to_num(m) for m in self.env.get_legal_moves(color = self.env.turn)]
 
     def reset(self):
         """
