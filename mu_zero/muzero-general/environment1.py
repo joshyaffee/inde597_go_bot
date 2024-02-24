@@ -466,9 +466,3 @@ class GoBoard:
         else:
             # only time when both are false is starting position
             return (1, visited_empty) if black_flag else (-1, visited_empty) 
-        
-# make board
-board = GoBoard(9)
-board.step("A1")
-board.step("B1")
-board.render()
