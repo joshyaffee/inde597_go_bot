@@ -5,6 +5,116 @@ Methods will be modelled after OpenAI Gym's environment API when possible.
 
 import numpy as np
 import networkx as nx
+import gc
+from copy import deepcopy
+
+class GoEnv:
+    """
+    for training
+    """
+
+    def __init__(self, size: int = 9, komi: float = -1):
+        self.size = size
+        self.board = GoBoard(size, komi)
+
+    def get_actions(self):
+        self.action_space = [(i,j) for i in range(self.size) for j in range(self.size)] + ["pass"]
+
+    def step(self, action):
+        return self.board.step(action)
+    
+    def reset(self, board = None, turn = 1):
+        return self.board.reset(board, turn)
+    
+    def render(self):
+        self.board.print_board()
+    
+    def get_legal_moves(self, color = None):
+        if color is None:
+            color = self.board.turn
+        return self.board.get_legal_moves(color, representation = 0)
+    
+    def get_score(self):
+        if self.board.game_over:
+            return self.board.black_score, self.board.white_score
+        else:
+            return 0, 0
+        
+    def close(self):
+        self.board = None
+        gc.collect()
+
+    def look_ahead(self, action, board = None, representation = 1):
+        """
+        Performs step on a copy of the board and returns the resulting board and
+        (observation, reward, game_over, {}) tuple.
+        """
+        if board is None:
+            board = self.board.__deepcopy__()
+        elif board == self.board:
+            board = deepcopy(board)
+            # warn user that the original board will not be modified
+            raise Warning("Original board will not be modified. New board will be used for look-ahead. Please use board = None to start a new look_ahead")
+        observation, reward, game_over, _ = board.step(action, representation = representation)
+        return board, (observation, reward, game_over, {})
+    
+    def pop(self, board):
+        """
+        Removes the last move from the board.
+        """
+        board.history.pop()
+        board.turn *= -1
+
+        if len(board.history) > 1:
+            board.passes = int(self.board.history[-1] == self.board.history[-2])
+        else:
+            board.passes = 0
+
+        board.game_over = False
+        board.black_score = None
+        board.white_score = None
+
+        # update board representations
+        board.update_matrix_from_ints(board.history[-1])
+        board.init_graph_board()
+        board.update_ints(board.matrix_board)
+        board.integer_representation = board.history[-1]
+
+        return board
+
+
+# class for playing bots against each other - commented out since EnvironmentVersus is not
+# in this version.
+
+# class GoVersus(EnvironmentVersus):
+#     """
+#     for playing bots against each other
+#     """
+#     env = GoEnv()
+#     reset = env.reset
+#     step = env.step
+#     render = env.render
+#     close = env.close
+#     look_ahead = env.look_ahead
+#     pop = env.pop
+#     get_actions = env.get_actions
+#     get_legal_moves = env.get_legal_moves
+#     get_score = env.get_score
+
+#     def is_terminal_state(self, state):
+#         """
+#         You probably should not use this.
+
+#         terminal is not encoded in the state, so we can only assume it's the current
+#         state of the board.
+#         """
+#         return self.env.board.game_over
+    
+#     def reinterpret_state_for_agent(self, state, agent_ind:int):
+#         """
+#         Returns the state in the format that the agent expects.
+#         """
+#         return state # up to you to implement if needed
 
 class GoBoard:
 
@@ -19,22 +129,24 @@ class GoBoard:
         if komi < 0:
             self.komi = 0 if self.size < 9 else 6.5
         self.komi = komi
-        self.history = []
+        self.history = [[0]*size, [0]*size] # [[black_ints], [white_ints]]
         self.turn = 1 # 1: black, -1: white
         self.passes = 0
-        self.captures = {1: 0, -1: 0}
         self.game_over = False
         self.black_score = None
         self.white_score = None
         self.matrix_board = np.zeros((size, size), dtype=int)
         self.init_graph_board()
-        self.white_ints = [0] * size # each entry incodes a row of white stones
-        self.black_ints = [0] * size # each entry incodes a row of black stones
+        self.white_ints = [0] * size # each entry encodes a row of white stones
+        self.black_ints = [0] * size # each entry encodes a row of black stones
         self.integer_representation = [self.white_ints, self.black_ints]
     
-    def reset(self, board = None, turn = 1):
+    def reset(self, board = None, turn = 1, representation = 1):
         """
-        Resets the board to the initial state. If a board representation is provided
+        Resets the board to the initial state. If a board representation is provided as
+        input, resets the board to that state. If no board is provided, resets the board
+        to an empty board. Board is returned in the specified representation. 0 -> ints,
+        1 -> matrix, 2 -> graph.
         """
         if board is None:
             self.__init__(self.size, self.komi)
@@ -44,7 +156,7 @@ class GoBoard:
             self.matrix_board = board
 
             # update graph representation
-            self.init_graph_board(self.size)
+            self.init_graph_board()
             
             # update ints representation
             self.update_ints(board)
@@ -73,19 +185,27 @@ class GoBoard:
             raise ValueError("Invalid board representation")
         
         self.turn = turn
-        self.history = []
+        self.history = [self.integer_representation]
         self.passes = 0
-        self.captures = {1: 0, -1: 0}
         self.game_over = False
         self.black_score = None
         self.white_score = None
 
-    def step(self, action, representation = 0):
+        if representation == 0:
+            rep = self.integer_representation
+        elif representation == 1:
+            rep = self.matrix_board
+        else:
+            rep = self.graph_board
+
+        return (rep, self.turn)
+
+    def step(self, action, representation = 1):
         """
         Takes a step in the game.
 
         Inputs:
-            - action: string, e.g. "A1", "S1", "pass", "resign"
+            - action: string, e.g. "A1", "S1", "pass", "resign" OR (int, int) tuple (x, y)
             - representation: int, 0 for ints, 1 for matrix, 2 for graph
 
         Returns:
@@ -101,7 +221,13 @@ class GoBoard:
               minimize value, black wants to maximize value)
             - game_over: bool, whether the game is over
         """
+        # not the best way to do this, but whatever. Makes it nicer for human use to
+        # center around "A1" notation
+        if type(action) is tuple:
+            action = self._pos_to_coord(*action)
+
         coord = action.upper()
+        this_turn = self.turn
 
         if coord == "PASS":
             self.passes += 1
@@ -143,13 +269,15 @@ class GoBoard:
 
         reward = self.black_score - self.white_score
         if reward > 0:
-            reward = 1
+            reward = this_turn
         elif reward < 0:
-            reward = -1
+            reward = -this_turn
         else:
             reward = 0
 
-        return rep, reward, self.game_over
+        observation = (rep, -this_turn)
+
+        return observation, reward, self.game_over, {}
 
     def update_ints(self, board = None, in_place = True):
         """
@@ -186,7 +314,7 @@ class GoBoard:
         """
         Updates the matrix representation of the board from the ints representation.
         """
-        white_ints, black_ints = ints
+        black_ints, white_ints = ints
         for i in range(self.size):
             for j in range(self.size):
                 if white_ints[i] & (1 << j):
@@ -215,16 +343,16 @@ class GoBoard:
 
     def _coord_to_pos(self, coord):
         # A1 -> (0, 0), S1 -> (18, 0)
-        x = ord(coord[0].upper()) - ord("A") # typically "I" is skipped. We can worry about this later.
-        y = int(coord[1:]) - 1
+        y = ord(coord[0].upper()) - ord("A") # typically "I" is skipped. We can worry about this later.
+        x = int(coord[1:]) - 1
         if x < 0 or x >= self.size or y < 0 or y >= self.size:
             raise ValueError("Invalid coordinate")
         return x, y
     
     def _pos_to_coord(self, x, y):
-        # (0, 0) -> A1, (18, 0) -> S1
+        # (0, 0) -> A1, (0, 18) -> S1
         # typically "I" is skipped. We can worry about this later.
-        return chr(x + ord("A")) + str(y + 1)
+        return chr(y + ord("A")) + str(x + 1)
 
     def add_stone(self, coord, color):
         """
@@ -240,12 +368,11 @@ class GoBoard:
         # get numerical position, check for legal capture, capture if valid
         x, y = self._coord_to_pos(coord)
         capture_num = self.check_captures(x, y, color, check_only=False)
-        self.captures[color] += capture_num
 
         # if stone has liberties or captures legally, add stone, update all representations, return True
         if self.check_liberties(x, y, color)[0] or capture_num > 0:
             self.graph_board.nodes[(x, y)]["color"] = color
-            self.matrix_board[y, x] = color
+            self.matrix_board[x, y] = color
             self.update_ints()
             return True
         else:
@@ -267,7 +394,7 @@ class GoBoard:
 
         # initialize BFS variables
         liberties = []
-        visted = {(x, y)}
+        visited = {(x, y)}
         queue = [(x, y)]
 
         # initialize group
@@ -276,15 +403,16 @@ class GoBoard:
         # BFS to find liberties
         while queue:
             x, y = queue.pop()
-            visted.add((x, y))
+            visited.add((x, y))
             for neighbor in self.graph_board.neighbors((x, y)):
-                if neighbor not in visted:
+                if neighbor not in visited:
                     if self.graph_board.nodes[neighbor]["color"] == 0:
                         liberties.append(neighbor)
                     elif self.graph_board.nodes[neighbor]["color"] == color:
-                        queue.append(neighbor)
+                        if neighbor not in queue:
+                            queue.append(neighbor)
                         visited_this_color.add(neighbor)
-        return liberties, visited_this_color
+        return list(set(liberties)), visited_this_color
 
     def check_captures(self, x, y, color, check_only=False):
         """
@@ -302,11 +430,11 @@ class GoBoard:
                 (doesn't really matter in Chinese scoring, but could be useful)
         """
 
-        neigbors = self.graph_board.neighbors((x, y))
+        neighbors = self.graph_board.neighbors((x, y))
         capture_num = 0
 
         # check each neighbor to see if it ran out of liberties + is of opposite color + is not a ko
-        for neighbor in neigbors:
+        for neighbor in neighbors:
             if self.graph_board.nodes[neighbor]["color"] == -color:
                 liberties, group = self.check_liberties(neighbor[0], neighbor[1], -color)
                 # if it ran out of liberties, capture it / return 1 if check_only
@@ -329,10 +457,10 @@ class GoBoard:
         possible_matrix_board = self.matrix_board.copy()
 
         possible_board.nodes[(x, y)]["color"] = self.turn
-        possible_matrix_board[y, x] = self.turn
+        possible_matrix_board[x, y] = self.turn
         for stone in group:
             possible_board.nodes[stone]["color"] = 0
-            possible_matrix_board[stone[1], stone[0]] = 0
+            possible_matrix_board[stone[0], stone[1]] = 0
             possible_ints = self.update_ints(board=possible_matrix_board, in_place=False)
 
         # check if ko rule is violated
@@ -345,17 +473,20 @@ class GoBoard:
             self.matrix_board = possible_matrix_board
         return len(group)
 
-    def get_legal_moves(self, color):
+    def get_legal_moves(self, color = None, representation = 0):
         """
         Returns a list of legal moves for color.
         
         Inputs:
             - color: int, 1 for black, -1 for white
+            - representation: int, 0 for (X, Y) coordinates, 1 for A1, B2, etc.
             
         Returns:
             - legal_moves: list of strings, each string is a coordinate such as "A1" or "pass" or "resign"
         """
-
+        if color is None:
+            color = self.turn
+        
         legal_moves = []
         for node in self.graph_board.nodes:
             if self.graph_board.nodes[node]["color"] == 0:
@@ -364,13 +495,11 @@ class GoBoard:
                     
                     legal_moves.append(node)
 
-        legal_moves = [self._pos_to_coord(*m) for m in legal_moves]
+        if representation == 1:
+            legal_moves = [self._pos_to_coord(*m) for m in legal_moves]
         legal_moves.append("pass")
         # legal_moves.append("resign") # we may want to remove this option for bot self-play!!!
         return legal_moves
-    
-    def render(self):
-        self.print_board()
 
     def print_board(self):
         """
@@ -464,3 +593,56 @@ class GoBoard:
         else:
             # only time when both are false is starting position
             return (1, visited_empty) if black_flag else (-1, visited_empty) 
+        
+    def print_history(self):
+        matrix_board = np.zeros((self.size, self.size), dtype=int)
+        for ints in self.history:
+            black_ints, white_ints = ints
+            for i in range(self.size):
+                for j in range(self.size):
+                    if white_ints[i] & (1 << j):
+                        matrix_board[i, j] = -1
+                    elif black_ints[i] & (1 << j):
+                        matrix_board[i, j] = 1
+                    else:
+                        matrix_board[i, j] = 0
+            print("  ", end="")
+            for i in range(self.size):
+                print(chr(ord("A") + i), end=" ")
+            print()
+            for i in range(self.size):
+                print(i + 1, end=" ")
+                for j in range(self.size):
+                    if matrix_board[i, j] == 0:
+                        print("_", end=" ")
+                    elif matrix_board[i, j] == 1:
+                        print("X", end=" ")
+                    else:
+                        print("O", end=" ")
+                print(i + 1)
+            print("  ", end="")
+            for i in range(self.size):
+                print(chr(ord("A") + i), end=" ")
+            print()
+            
+    def __deepcopy__(self):
+        new_board = GoBoard(self.size, self.komi)
+        new_board.matrix_board = np.copy(self.matrix_board)
+        new_board.graph_board = deepcopy(self.graph_board)
+        new_board.white_ints = self.white_ints.copy()
+        new_board.black_ints = self.black_ints.copy()
+        new_board.integer_representation = deepcopy(self.integer_representation)
+        new_board.turn = self.turn
+        new_board.history = deepcopy(self.history)
+        new_board.passes = self.passes
+        new_board.game_over = self.game_over
+        new_board.black_score = self.black_score
+        new_board.white_score = self.white_score
+        return new_board
+
+# pass
+# e = GoEnv(size = 5)
+# m = np.array([[-1,-1,-1,1,-1],[1,-1,0,0,0],[0,-1,1,-1,0],[1,1,-1,1,1],[1,0,-1,1,0]])
+# e.reset(board = m)
+# e.step('B5')
+pass
