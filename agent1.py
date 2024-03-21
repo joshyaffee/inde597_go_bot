@@ -5,8 +5,9 @@ subclasses will implement the policy function
 
 import environment1 as env1
 import numpy as np
-from tensorflow.keras.layers import Input, Conv2D, Flatten, Dense, concatenate
+from tensorflow.keras.layers import Input, Conv2D, Flatten, Dense, concatenate, LSTM, MaxPooling2D
 from tensorflow.keras.models import Model
+import tensorflow.keras as keras
 import random
 import tqdm
 import time
@@ -72,68 +73,120 @@ class RandomDiagonalAgent(Agent):
     
 class NeuralAgent:
 
-    def __init__(self, env: env1.GoEnv = None, policy_path = None):
+    def __init__(self, env: env1.GoEnv = None, policy_path = None, name = None):
 
         self.env = env
         self.board_size = env.size
-        self.nn = self._init_nn()
         if policy_path is None:
-            pass
+            self.nn = self._init_nn()
         else:
             self.load(policy_path)
+        self.name = time.time() if name is None else name
+
+    def sim_all_moves(self, capture_prop=0.01):
+        """
+        Simulate all possible moves including pass and return {move: q_predict} dictionary.
+        """
+        legal_moves = self.env.get_legal_moves()
+        q = {lm: 0 for lm in legal_moves}
+        r = {lm: 0 for lm in legal_moves}
+        board = self.env.board.__deepcopy__()
+        batch_states = []
+        batch_moves = []
+
+        for move in legal_moves:
+            # simulate move
+            board, ((matrix, turn), reward, done, extra) = self.env.look_ahead(move, board, representation=1)
+
+            # add reward for captures - this is a heuristic
+            reward += capture_prop * extra['num_captured']
+            r[move] = reward
+
+            # if game is draw, set slightly negative reward - heuristic to discourage peaceful games
+            if done and reward == 0:
+                r[move] = -0.1
+
+            # # if matrix only has one zero left after playing, set its q value to -1
+            # if np.sum(matrix == 0) == 1:
+            #     q[move] = -1
+            #     self.env.pop(board)
+            #     continue
+
+            batch_states.append(-1 * matrix)
+            batch_moves.append(turn)
+            # i think so 
+            self.env.pop(board)
+
+        if batch_states:
+            batch_states = np.array(batch_states)
+            batch_moves = np.array(batch_moves)
+            q_values = self._predict(batch_states, batch_moves)
+            for move, q_value in zip(legal_moves, q_values):
+                q[move] = q_value + r[move]
+
+        return q
+
+    def _predict(self, images, others, verbose=0):
+        # get lowest hashed symmetry
+        syms = [self.collapse_symmetries(image) for image in images]
+        syms = np.array(syms)
+        return self.nn.predict({'image_input': syms, 'other_input': others.reshape(-1, 1)}, verbose=verbose)[:, 0]
+    
+    def _fit(self, images, others, targets, verbose=0):
+        # Initialize arrays to store the images and others
+        num_samples = len(images)
+        sym_images = np.empty((num_samples, 5, 5))
+        sym_others = np.empty((num_samples, 1))
+
+        # Preprocess images and others
+        for i in range(num_samples):
+            sym_images[i] = self.collapse_symmetries(images[i])
+            sym_others[i] = others[i]
+
+        # Fit the network
+        self.nn.fit({'image_input': sym_images, 'other_input': sym_others}, targets, verbose=verbose)
+
+    def pass_adjust(self, q):
+        """
+        Adjust the q value for pass depending on the number of legal moves.
+        """
+        if len(q) == 1:
+            # if there is only one legal move, it is pass. Q value does not matter.
+            return q
+        
+        q["pass"] += self.board_size/(2 * len(q) - 2) - 0.5
+        return q
+        
 
     def act(self, epsilon = 0.1, greedy = "softmax"):
         """
         Choose an action based on the current state.
             - epsilon is the probability of choosing a random action.
             - greedy is the method of choosing an action.
-                - "softmax": Softmax of all positive Q values if not random action.
+                - "softmax": Softmax of all Q values if not random action.
                 - "greedy": Choose the action with the highest Q value.
-            
-            
         """
-        legal_moves = self.env.get_legal_moves()
-        q = {lm: 0 for lm in legal_moves}
-        board = self.env.board.__deepcopy__()
+        q = self.sim_all_moves()
 
-        legal_moves.remove("pass")
-        if np.random.rand() < epsilon:
-            if len(legal_moves) == 0:
-                return "pass"
-            return random.choice(legal_moves)
-        else:        
-            for move in legal_moves:
-                if len(legal_moves) + 1 != len(board.get_legal_moves()):
-                    print("error detected")
-                    pass
-                # simulate move
-                board, ((matrix, turn), reward, done, _) = self.env.look_ahead(move, board, representation = 1)
+        # adjust q value for pass depending on the number of legal moves
+        # q = self.pass_adjust(q) # purpose: to encourage the agent to finish games when the board fills up.
 
-                # if matrix only has one zero left after playing, set its q value to -1
-                if np.sum(matrix == 0) == 1:
-                    q[move] = -1
-                    self.env.pop(board)
-                    continue
-
-                # get Q value
-                # q[move] = -1 * self.nn.predict([np.array([matrix]), turn])
-                # multiply by -1 since we consider the opponent's turn
-                q[move] = -1 * self.nn.predict({'image_input': matrix.reshape(1, 5, 5, 1), 'other_input': np.array([[turn]])}, verbose = 0)[0,0]
-                self.env.pop(board)
+        if random.random() < epsilon:
+            # random action
+            return random.choice(list(q.keys()))
 
         if greedy == "softmax":
             # softmax
-            max_q = np.max(list(q.values()))
-            exp_q = {k: np.exp(v - max_q) for k, v in q.items() if v > 0}  # Subtracting max_q for numerical stability
+            stretch = 3
+            exp_q = {k: np.exp(stretch * v) for k, v in q.items()}
             exp_sum = sum(exp_q.values())
             q = {k: v / exp_sum for k, v in exp_q.items()}
-            if len(q) == 0:
-                return "pass"
-            
             return random.choices(list(q.keys()), weights = list(q.values()))[0]
+        
         elif greedy == "greedy":
             # greedy
             return max(q, key = q.get)
+        
         else:
             raise ValueError("greedy must be 'softmax' or 'greedy'")
 
@@ -158,7 +211,8 @@ class NeuralAgent:
 
         # Dense layers for combined features
         dense1 = Dense(128, activation='relu')(concatenated)
-        output = Dense(1, activation='sigmoid')(dense1)
+        dense2 = Dense(16, activation='relu')(dense1)
+        output = Dense(1, activation='sigmoid')(dense2)
 
         # Define model
         model = Model(inputs=[image_input, other_input], outputs=output)
@@ -171,7 +225,7 @@ class NeuralAgent:
 
         return model
 
-    def train(self, N, batch_size=32, gamma=0.9, epsilon=0.1, greedy="softmax"):
+    def train(self, N, batch_size=32, gamma=0.9, epsilon=0.1, greedy="softmax", capture_prop=0.01):
         self.replay_buffer = []
         try:
             for episode in tqdm.tqdm(range(N), desc=f'Working on {N} episodes of training'):
@@ -180,35 +234,52 @@ class NeuralAgent:
                 done = False
                 while not done:
                     # Choose action
-                    action = self.act(epsilon=epsilon, greedy=greedy)
+                    action = self.act(epsilon=epsilon, greedy="softmax")
                     # Take action
-                    next_state, reward, done, _ = self.env.step(action)
-                    matrix, turn = next_state
-                    # Compute target
-                    target = reward - gamma * self.nn.predict({'image_input': matrix.reshape(1, 5, 5, 1), 'other_input': np.array([[turn]])}, verbose = 0)[0][0]
-                    
+                    state, reward, done, extra = self.env.step(action)
+                    # print board
+                    if episode % 10 == 0:
+                        self.env.board.print_board()
+
+                    # Add reward for captures - this is a heuristic
+                    reward += capture_prop * extra['num_captured']
+
+                    # if game is draw, set slightly negative reward - heuristic to
+                    # discourage peaceful games
+                    if done and reward == 0:
+                        reward = -0.1
+
+                    # If the game is over, set the target to the reward
+                    if done:
+                        max_q = 0
+                    else:
+                        # get target from greedy policy
+                        q = self.sim_all_moves()
+                        max_q = max(q.values())
+                    target = np.array([reward + gamma * max_q])
+
                     # Add this state to the replay buffer
                     self.replay_buffer.append((state, target))
                     # Train the network using experience replay
                     if len(self.replay_buffer) >= batch_size:
                         minibatch = random.sample(self.replay_buffer, batch_size)
-                        for state, target in minibatch:
-                            self.nn.fit({'image_input': state[0].reshape(1, 5, 5, 1), 'other_input': np.array([[state[1]]])}, target.reshape(1,-1), verbose=0)
-                    # Update state
-                    state = next_state
+                        images = np.array([sample[0][0] for sample in minibatch])  # Extracting images
+                        others = np.array([sample[0][1] for sample in minibatch])  # Extracting others
+                        targets = np.array([sample[1] for sample in minibatch])
+                        self._fit(images, others, targets)
         except KeyboardInterrupt:
             print("Training interrupted")
             if episode < 10:
                 print("Training did not complete 10 episodes. Nothing will be saved.")
                 return None
-        self.save(f"nn_policies/size{self.board_size}/{time.time()}.h5")
-        return self.nn   
+        self.save(f"nn_policies/size{self.board_size}/{self.name}.keras")
+        return self.nn    
 
     def save(self, path):
-        self.nn.save_weights(path) 
+        Model.save(self.nn, path)
 
     def load(self, path):
-        self.nn.load_weights(path)
+        self.nn = keras.models.load_model(path)
     
     def play_human(self, color = 1):
         self.env.reset()
@@ -237,7 +308,7 @@ class NeuralAgent:
         # was a draw.
         # so if color * reward * self.env.turn is 1, the human won. If it is -1, the human
         # lost. If it is 0, it was a draw.
-        x = color * reward * self.env.board.turnC
+        x = color * reward * self.env.board.turn
         if x == 1:
             print("You won!")
         elif x == -1:
@@ -247,31 +318,29 @@ class NeuralAgent:
         return None
 
     # later enhancement: collapse symmetries
-    # def collapse_symmetries(self, state):
-    #     """
-    #     Return the lowest hashed representation of all symmetries of the state.
-    #     """
-    #     matrix, turn = state
-        
-    #     # All symmetries of dihedral group D4
-    #     e = matrix
-    #     r1 = np.rot90(matrix)
-    #     r2 = np.rot90(matrix, 2)
-    #     r3 = np.rot90(matrix, 3)
-    #     s = np.flip(matrix, 0)
-    #     sr1 = np.rot90(s)
-    #     sr2 = np.rot90(s, 2)
-    #     sr3 = np.rot90(s, 3)
+    def collapse_symmetries(self, matrix):
+        """
+        Return the lowest hashed representation of all symmetries of the state.
+        """
+        # All symmetries of dihedral group D4
+        e = matrix
+        r1 = np.rot90(matrix)
+        r2 = np.rot90(matrix, 2)
+        r3 = np.rot90(matrix, 3)
+        s = np.flip(matrix, 0)
+        sr1 = np.rot90(s)
+        sr2 = np.rot90(s, 2)
+        sr3 = np.rot90(s, 3)
 
-    #     # sort by hash
-    #     symmetries = [e, r1, r2, r3, s, sr1, sr2, sr3]
-    #     symmetries = sorted(symmetries, key = lambda x: hash(str(x)))
-    #     return symmetries[0], turn
+        # sort by hash
+        symmetries = [e, r1, r2, r3, s, sr1, sr2, sr3]
+        symmetries = sorted(symmetries, key = lambda x: hash(str(x)))
+        return symmetries[0]
                 
 # test nn agent
 env = env1.GoEnv(size = 5)
-agent = NeuralAgent(env, policy_path = r"nn_policies/size5/1710135423.8806815.h5")
-# agent.train(25)
+agent = NeuralAgent(env, policy_path= r"nn_policies\size5\conv1.keras", name = "conv1")
+agent.train(1500, batch_size=32, gamma=0.99, epsilon=0.1, greedy="softmax")
 agent.play_human(color = 1)
 print("\n"*5)
 agent.play_human(color = -1)

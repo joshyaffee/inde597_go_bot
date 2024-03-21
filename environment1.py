@@ -55,8 +55,8 @@ class GoEnv:
             board = deepcopy(board)
             # warn user that the original board will not be modified
             raise Warning("Original board will not be modified. New board will be used for look-ahead. Please use board = None to start a new look_ahead")
-        observation, reward, game_over, _ = board.step(action, representation = representation)
-        return board, (observation, reward, game_over, {})
+        observation, reward, game_over, extra = board.step(action, representation = representation)
+        return board, (observation, reward, game_over, extra)
     
     def pop(self, board):
         """
@@ -277,7 +277,14 @@ class GoBoard:
 
         observation = (rep, -this_turn)
 
-        return observation, reward, self.game_over, {}
+        # get number of stones captured by this move
+        # use bitwise XOR of opponent's stones to find the stones that were captured
+        history_idx = int(this_turn == 1)
+        stones_prev = self.history[-2][history_idx]
+        stones_curr = self.history[-1][history_idx]
+        num_captured = sum([bin(sp ^ sc).count("1") for sp, sc in zip(stones_prev, stones_curr)])
+
+        return observation, reward, self.game_over, {"num_captured": num_captured}
 
     def update_ints(self, board = None, in_place = True):
         """
