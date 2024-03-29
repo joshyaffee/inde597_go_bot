@@ -335,7 +335,12 @@ class MCTS:
 
             # Inside the search tree we use the dynamics function to obtain the next hidden
             # state given an action and the previous hidden state
-            parent = search_path[-2]
+            try:
+                parent = search_path[-2]
+            except IndexError:
+                import code
+                code.interact(local=locals())
+                
             value, reward, policy_logits, hidden_state = model.recurrent_inference(
                 parent.hidden_state,
                 torch.tensor([[action]]).to(parent.hidden_state.device),

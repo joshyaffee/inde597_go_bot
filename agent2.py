@@ -83,14 +83,17 @@ class NeuralAgent:
             self.load(policy_path)
         self.name = time.time() if name is None else name
 
-    def sim_all_moves(self, capture_prop=0.01):
+    def sim_all_moves(self, rep, turn, capture_prop=0.01):
         """
         Simulate all possible moves including pass and return {move: q_predict} dictionary.
         """
-        legal_moves = self.env.get_legal_moves()
+        board = env1.GoBoard(size = self.board_size)
+        board.reset(board = rep, turn = turn)
+
+        legal_moves = board.get_legal_moves()
         q = {lm: 0 for lm in legal_moves}
         r = {lm: 0 for lm in legal_moves}
-        board = self.env.board.__deepcopy__()
+
         batch_states = []
         batch_moves = []
 
@@ -114,7 +117,7 @@ class NeuralAgent:
 
             batch_states.append(-1 * matrix)
             batch_moves.append(turn)
-            # i think so 
+            
             self.env.pop(board)
 
         if batch_states:
@@ -122,7 +125,7 @@ class NeuralAgent:
             batch_moves = np.array(batch_moves)
             q_values = self._predict(batch_states, batch_moves)
             for move, q_value in zip(legal_moves, q_values):
-                q[move] = q_value + r[move]
+                q[move] = r[move] - q_value
 
         return q
 
@@ -158,7 +161,7 @@ class NeuralAgent:
         return q
         
 
-    def act(self, epsilon = 0.1, greedy = "softmax"):
+    def act(self, state, epsilon = 0.1, greedy = "softmax"):
         """
         Choose an action based on the current state.
             - epsilon is the probability of choosing a random action.
@@ -166,7 +169,7 @@ class NeuralAgent:
                 - "softmax": Softmax of all Q values if not random action.
                 - "greedy": Choose the action with the highest Q value.
         """
-        q = self.sim_all_moves()
+        q = self.sim_all_moves(state[0], state[1])
 
         # adjust q value for pass depending on the number of legal moves
         # q = self.pass_adjust(q) # purpose: to encourage the agent to finish games when the board fills up.
@@ -234,7 +237,7 @@ class NeuralAgent:
                 done = False
                 while not done:
                     # Choose action
-                    action = self.act(epsilon=epsilon, greedy="softmax")
+                    action = self.act(state, epsilon=epsilon, greedy="softmax")
                     # Take action
                     state, reward, done, extra = self.env.step(action)
                     # print board
@@ -254,12 +257,15 @@ class NeuralAgent:
                         max_q = 0
                     else:
                         # get target from greedy policy
-                        q = self.sim_all_moves()
+                        q = self.sim_all_moves(-1 * state[0], -1 * state[1])
                         max_q = max(q.values())
                     target = np.array([reward + gamma * max_q])
 
                     # Add this state to the replay buffer
                     self.replay_buffer.append((state, target))
+
+                    # flip the state for the next player
+                    state = (-1 * state[0], -1 * state[1])
 
                     # Train the network using experience replay
                     if len(self.replay_buffer) >= batch_size:
@@ -283,13 +289,13 @@ class NeuralAgent:
         self.nn = keras.models.load_model(path)
     
     def play_human(self, color = 1):
-        self.env.reset()
+        state = self.env.reset()
         done = False
         self.env.board.print_board()
         while not done:
             if self.env.board.turn == color:
-                action = self.act(epsilon=0, greedy="greedy")
-                next_state, reward, done, _ = self.env.step(action)
+                action = self.act(state, epsilon=0, greedy="greedy")
+                state, reward, done, _ = self.env.step(action)
                 print(action)
                 self.env.board.print_board()
             else:
@@ -298,7 +304,7 @@ class NeuralAgent:
                     print("You resigned.")
                     return None
                 try:
-                    next_state, reward, done, _ = self.env.step(action)
+                    state, reward, done, _ = self.env.step(action)
                 except:
                     print("Illegal move")
                     continue
@@ -336,12 +342,14 @@ class NeuralAgent:
         # sort by hash
         symmetries = [e, r1, r2, r3, s, sr1, sr2, sr3]
         symmetries = sorted(symmetries, key = lambda x: hash(str(x)))
+        # TODO: it might make more sense to sort by some other metric for deep learning to
+        # maintain a manifold!
         return symmetries[0]
                 
 # test nn agent
 env = env1.GoEnv(size = 5)
-agent = NeuralAgent(env, policy_path= r"nn_policies\size5\conv1.keras", name = "conv1")
-agent.train(1500, batch_size=32, gamma=0.99, epsilon=0.1, greedy="softmax")
+agent = NeuralAgent(env, policy_path= r"nn_policies\size5\conv2.keras", name = "conv2")
+agent.train(150, batch_size=32, gamma=0.99, epsilon=0.1, greedy="greedy")
 agent.play_human(color = 1)
 print("\n"*5)
 agent.play_human(color = -1)
