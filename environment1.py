@@ -19,6 +19,7 @@ class GoEnv:
 
     def get_actions(self):
         self.action_space = [(i,j) for i in range(self.size) for j in range(self.size)] + ["pass"]
+        return self.action_space
 
     def step(self, action):
         return self.board.step(action)
